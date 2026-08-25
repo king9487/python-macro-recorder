@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import queue
+import sys
 import tkinter as tk
 from pathlib import Path
 from tkinter import messagebox, ttk
@@ -20,7 +21,11 @@ class MacroRecorderApp:
         self.root.resizable(False, False)
         self.macro = Macro()
         self.current_path: Path | None = None
-        self.script_directory = Path(__file__).resolve().parent.parent / "script"
+        if getattr(sys, "frozen", False):
+            application_directory = Path(sys.executable).resolve().parent
+        else:
+            application_directory = Path(__file__).resolve().parent.parent
+        self.script_directory = application_directory / "script"
         self.script_directory.mkdir(exist_ok=True)
         self.state = "Idle"
         self.messages: queue.Queue[tuple[str, Any]] = queue.Queue()

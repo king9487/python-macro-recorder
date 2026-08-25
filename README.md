@@ -68,6 +68,16 @@ Run automated tests with:
 python -m unittest discover -s tests -v
 ```
 
+## Build a Windows executable
+
+Double-click `build.bat`, or run it from PowerShell:
+
+```powershell
+.\build.bat
+```
+
+The script installs the build requirements and creates `dist\MacroRecorder.exe`. In the packaged application, saved macros are stored in `dist\script` beside the executable. PyInstaller's `build`, `dist`, and generated `.spec` files are excluded from Git.
+
 ## Known limitations and risks
 
 - Global input control can trigger destructive actions in whichever window has focus. Test new macros in a safe application first.
