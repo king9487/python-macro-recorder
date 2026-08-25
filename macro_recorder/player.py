@@ -17,7 +17,11 @@ def decode_key(value: str) -> keyboard.Key | keyboard.KeyCode:
         except ValueError as exc:
             raise ValueError(f"Invalid virtual key: {value!r}") from exc
     special = getattr(keyboard.Key, value, None)
-    return special if special is not None else keyboard.KeyCode.from_char(value)
+    if special is not None:
+        return special
+    if len(value) != 1:
+        raise ValueError(f"Invalid keyboard key: {value!r}")
+    return keyboard.KeyCode.from_char(value)
 
 
 class MacroPlayer:

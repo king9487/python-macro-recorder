@@ -8,9 +8,11 @@ from pathlib import Path
 from tkinter import messagebox, ttk
 from typing import Any
 
+from .event_dialog import edit_event
+from .event_editor import EventEditError, EventEditorModel, format_delay
 from .hotkeys import GlobalHotkeys
 from .i18n import LANGUAGES, TRANSLATIONS
-from .models import Macro, MacroValidationError
+from .models import Macro, MacroEvent, MacroValidationError
 from .player import MacroPlayer
 from .recorder import MacroRecorder
 from .storage import load_macro, save_macro
@@ -19,8 +21,9 @@ from .storage import load_macro, save_macro
 class MacroRecorderApp:
     def __init__(self, root: tk.Tk) -> None:
         self.root = root
-        self.root.resizable(False, False)
+        self.root.resizable(True, True)
         self.macro = Macro()
+        self.editor = EventEditorModel(self.macro.events)
         self.current_path: Path | None = None
         if getattr(sys, "frozen", False):
             application_directory = Path(sys.executable).resolve().parent
@@ -56,10 +59,17 @@ class MacroRecorderApp:
         self.hotkeys.start()
         self.root.after(30, self._process_messages)
         self.root.protocol("WM_DELETE_WINDOW", self._close)
+        self.root.bind("<Control-s>", self._save_shortcut)
+        self.root.bind("<Delete>", self._delete_shortcut)
 
     def _build(self) -> None:
         frame = ttk.Frame(self.root, padding=16)
         frame.grid(sticky="nsew")
+        self.root.columnconfigure(0, weight=1)
+        self.root.rowconfigure(0, weight=1)
+        frame.columnconfigure(1, weight=1)
+        frame.columnconfigure(2, weight=1)
+        frame.rowconfigure(11, weight=1)
         self.name_label = ttk.Label(frame)
         self.name_label.grid(row=0, column=0, sticky="w", pady=4)
         ttk.Entry(frame, textvariable=self.name_var, width=42).grid(row=0, column=1, columnspan=3, sticky="ew", pady=4)
@@ -78,10 +88,10 @@ class MacroRecorderApp:
 
         self.save_button = ttk.Button(frame, text="Save", command=self.save)
         self.load_button = ttk.Button(frame, text="Load Selected", command=self.load)
-        self.delete_button = ttk.Button(frame, command=self.delete_selected)
+        self.delete_macro_button = ttk.Button(frame, command=self.delete_macro_selected)
         self.save_button.grid(row=3, column=0, sticky="ew", padx=3, pady=4)
         self.load_button.grid(row=3, column=1, columnspan=2, sticky="ew", padx=3, pady=4)
-        self.delete_button.grid(row=3, column=3, sticky="ew", padx=3, pady=4)
+        self.delete_macro_button.grid(row=3, column=3, sticky="ew", padx=3, pady=4)
 
         self.saved_label = ttk.Label(frame)
         self.saved_label.grid(row=4, column=0, sticky="w", pady=(8, 4))
@@ -123,6 +133,36 @@ class MacroRecorderApp:
         self.language_combo.grid(row=10, column=3, sticky="w", pady=(12, 0))
         self.language_combo.bind("<<ComboboxSelected>>", lambda _event: self._apply_language())
 
+        self.editor_frame = ttk.LabelFrame(frame, padding=8)
+        self.editor_frame.grid(row=11, column=0, columnspan=4, sticky="nsew", pady=(12, 0))
+        self.editor_frame.columnconfigure(0, weight=1)
+        self.editor_frame.rowconfigure(0, weight=1)
+        columns = ("number", "type", "action", "value", "delay")
+        self.event_tree = ttk.Treeview(self.editor_frame, columns=columns, show="headings",
+                                       selectmode="browse", height=12)
+        self.event_tree.grid(row=0, column=0, sticky="nsew")
+        self.event_tree.column("number", width=45, minwidth=40, anchor="center", stretch=False)
+        self.event_tree.column("type", width=100, minwidth=80, anchor="w")
+        self.event_tree.column("action", width=90, minwidth=70, anchor="w")
+        self.event_tree.column("value", width=250, minwidth=150, anchor="w")
+        self.event_tree.column("delay", width=90, minwidth=70, anchor="e", stretch=False)
+        scrollbar = ttk.Scrollbar(self.editor_frame, orient="vertical", command=self.event_tree.yview)
+        scrollbar.grid(row=0, column=1, sticky="ns")
+        self.event_tree.configure(yscrollcommand=scrollbar.set)
+        self.event_tree.bind("<<TreeviewSelect>>", lambda _event: self._update_editor_controls())
+        self.event_tree.bind("<Double-1>", lambda _event: self.edit_selected_event())
+
+        editor_buttons = ttk.Frame(self.editor_frame)
+        editor_buttons.grid(row=1, column=0, columnspan=2, sticky="e", pady=(8, 0))
+        self.edit_event_button = ttk.Button(editor_buttons, command=self.edit_selected_event)
+        self.delete_event_button = ttk.Button(editor_buttons, command=self.delete_selected_event)
+        self.move_up_button = ttk.Button(editor_buttons, command=self.move_selected_event_up)
+        self.move_down_button = ttk.Button(editor_buttons, command=self.move_selected_event_down)
+        self.edit_event_button.grid(row=0, column=0, padx=3)
+        self.delete_event_button.grid(row=0, column=1, padx=3)
+        self.move_up_button.grid(row=0, column=2, padx=3)
+        self.move_down_button.grid(row=0, column=3, padx=3)
+
     def _text(self, key: str) -> str:
         language = LANGUAGES.get(self.language_var.get(), "en")
         return TRANSLATIONS[language][key]
@@ -137,12 +177,20 @@ class MacroRecorderApp:
             self.events_label: "events", self.status_label: "status", self.language_label: "language",
             self.record_button: "record", self.stop_record_button: "stop_recording",
             self.play_button: "play", self.stop_play_button: "stop_playback",
-            self.save_button: "save", self.load_button: "load", self.delete_button: "delete",
+            self.save_button: "save", self.load_button: "load", self.delete_macro_button: "delete_macro_file",
+            self.editor_frame: "event_editor", self.edit_event_button: "edit",
+            self.delete_event_button: "delete", self.move_up_button: "move_up",
+            self.move_down_button: "move_down",
         }
         for widget, key in labels.items():
             widget.configure(text=self._text(key))
         if self.current_path is None:
-            self.path_var.set(self._text("no_file"))
+            self._update_path_display()
+        headings = {"number": "number", "type": "type", "action": "action",
+                    "value": "value", "delay": "delay"}
+        for column, key in headings.items():
+            self.event_tree.heading(column, text=self._text(key))
+        self._refresh_event_table(self._selected_event_index())
         self._update_status()
 
     def _update_status(self) -> None:
@@ -168,17 +216,126 @@ class MacroRecorderApp:
         self.stop_record_button.configure(state="normal" if recording else "disabled")
         self.play_button.configure(state="normal" if idle and self.macro.events else "disabled")
         self.stop_play_button.configure(state="normal" if playing else "disabled")
-        for widget in (self.save_button, self.load_button, self.delete_button,
+        for widget in (self.save_button, self.load_button, self.delete_macro_button,
                        self.repeat_entry, self.speed_entry,
                        self.interval_entry, self.start_delay_entry):
             widget.configure(state="normal" if idle else "disabled")
         if idle and not self.saved_macro_var.get():
             self.load_button.configure(state="disabled")
-            self.delete_button.configure(state="disabled")
+            self.delete_macro_button.configure(state="disabled")
         self.saved_macro_combo.configure(state="readonly" if idle else "disabled")
+        self._update_editor_controls()
+
+    def _selected_event_index(self) -> int | None:
+        selection = self.event_tree.selection()
+        if not selection:
+            return None
+        try:
+            return int(selection[0])
+        except ValueError:
+            return None
+
+    def _update_editor_controls(self) -> None:
+        idle = self.state in {"Idle", "Stopped"}
+        index = self._selected_event_index()
+        valid = idle and index is not None and 0 <= index < len(self.editor.events)
+        self.edit_event_button.configure(state="normal" if valid else "disabled")
+        self.delete_event_button.configure(state="normal" if valid else "disabled")
+        self.move_up_button.configure(state="normal" if valid and index > 0 else "disabled")
+        self.move_down_button.configure(
+            state="normal" if valid and index < len(self.editor.events) - 1 else "disabled"
+        )
+
+    def _refresh_event_table(self, selected: int | None = None) -> None:
+        self.event_tree.delete(*self.event_tree.get_children())
+        for index, event in enumerate(self.editor.events):
+            self.event_tree.insert("", "end", iid=str(index), values=self._event_row(index, event))
+        self.count_var.set(str(len(self.editor.events)))
+        if selected is not None and 0 <= selected < len(self.editor.events):
+            item = str(selected)
+            self.event_tree.selection_set(item)
+            self.event_tree.focus(item)
+            self.event_tree.see(item)
+        self._update_editor_controls()
+
+    def _event_row(self, index: int, event: MacroEvent) -> tuple[str, str, str, str, str]:
+        event_type = self._text("type_keyboard") if event.type == "keyboard" else self._text("type_mouse")
+        action = self._text(f"action_{event.action}")
+        if event.type == "keyboard":
+            value = event.key or ""
+        elif event.action == "move":
+            value = f"{event.x}, {event.y}"
+        elif event.action in {"down", "up"}:
+            button = self._text(f"button_{event.button}")
+            value = f"{button} @ {event.x}, {event.y}"
+        else:
+            value = f"{event.dx}, {event.dy}"
+        return str(index + 1), event_type, action, value, format_delay(event.delay)
+
+    def edit_selected_event(self) -> None:
+        if self.state not in {"Idle", "Stopped"}:
+            return
+        index = self._selected_event_index()
+        if index is None:
+            return
+        values = edit_event(self.root, self.editor.events[index], self._text)
+        if values is None:
+            return
+        try:
+            self.editor.edit(index, values)
+        except EventEditError as exc:
+            message = self._event_edit_error(exc)
+            messagebox.showerror(self._text("validation_error"), message, parent=self.root)
+            return
+        self._after_editor_change(index)
+
+    def delete_selected_event(self) -> None:
+        if self.state not in {"Idle", "Stopped"}:
+            return
+        index = self._selected_event_index()
+        if index is None:
+            return
+        question = self._text("delete_event_question").format(number=index + 1)
+        if not messagebox.askyesno(self._text("delete_event"), question, parent=self.root):
+            return
+        selected = self.editor.delete(index)
+        self._after_editor_change(selected)
+
+    def move_selected_event_up(self) -> None:
+        index = self._selected_event_index()
+        if self.state in {"Idle", "Stopped"} and index is not None:
+            self._after_editor_change(self.editor.move_up(index))
+
+    def move_selected_event_down(self) -> None:
+        index = self._selected_event_index()
+        if self.state in {"Idle", "Stopped"} and index is not None:
+            self._after_editor_change(self.editor.move_down(index))
+
+    def _after_editor_change(self, selected: int | None) -> None:
+        self._refresh_event_table(selected)
+        self._update_path_display()
+        self._update_controls()
+
+    def _event_edit_error(self, error: EventEditError) -> str:
+        if error.code == "invalid_integer" and error.field:
+            return self._text("validation_integer").format(field=self._text(error.field))
+        return self._text(f"validation_{error.code}")
+
+    def _update_path_display(self) -> None:
+        path = str(self.current_path) if self.current_path else self._text("no_file")
+        self.path_var.set(f"{path} *" if self.editor.dirty else path)
+
+    def _confirm_discard_changes(self) -> bool:
+        if not self.editor.dirty:
+            return True
+        return messagebox.askyesno(
+            self._text("unsaved_changes"), self._text("discard_changes_question"), parent=self.root
+        )
 
     def start_recording(self) -> None:
         if self.state not in {"Idle", "Stopped"}:
+            return
+        if not self._confirm_discard_changes():
             return
         try:
             self.recorder.start()
@@ -186,7 +343,9 @@ class MacroRecorderApp:
             messagebox.showerror(self._text("recording_error"), str(exc), parent=self.root)
             return
         self.macro.events = []
-        self.count_var.set("0")
+        self.editor.load(self.macro.events)
+        self._refresh_event_table()
+        self._update_path_display()
         self._set_state("Recording")
         self.root.after_idle(self.root.iconify)
 
@@ -194,7 +353,9 @@ class MacroRecorderApp:
         if self.state != "Recording":
             return
         self.macro.events = self.recorder.stop()
-        self.count_var.set(str(len(self.macro.events)))
+        self.editor.load(self.macro.events, dirty=True)
+        self._refresh_event_table(0 if self.macro.events else None)
+        self._update_path_display()
         self._set_state("Stopped")
         self._restore_window()
 
@@ -270,7 +431,8 @@ class MacroRecorderApp:
             messagebox.showerror(self._text("save_error"), str(exc), parent=self.root)
             return
         self.current_path = path
-        self.path_var.set(str(self.current_path))
+        self.editor.mark_saved()
+        self._update_path_display()
         self._refresh_saved_macros(path.name)
         self._set_state("Idle")
 
@@ -279,22 +441,29 @@ class MacroRecorderApp:
         if not filename:
             messagebox.showinfo(self._text("load_macro"), self._text("no_macros"), parent=self.root)
             return
+        if not self._confirm_discard_changes():
+            self.saved_macro_var.set(self.current_path.name if self.current_path else "")
+            self._update_controls()
+            return
         path = self.script_directory / filename
         try:
             macro = load_macro(path)
         except MacroValidationError as exc:
             messagebox.showerror(self._text("invalid_macro"), str(exc), parent=self.root)
+            self.saved_macro_var.set(self.current_path.name if self.current_path else "")
+            self._update_controls()
             return
         self.macro = macro
+        self.editor.load(macro.events)
         self.current_path = Path(path)
         self.name_var.set(macro.name)
         self.repeat_var.set(str(macro.repeat))
         self.interval_var.set(str(macro.repeat_interval))
-        self.path_var.set(str(self.current_path))
-        self.count_var.set(str(len(macro.events)))
+        self._update_path_display()
+        self._refresh_event_table(0 if macro.events else None)
         self._set_state("Idle")
 
-    def delete_selected(self) -> None:
+    def delete_macro_selected(self) -> None:
         if self.state not in {"Idle", "Stopped"}:
             return
         filename = self.saved_macro_var.get()
@@ -312,10 +481,22 @@ class MacroRecorderApp:
             return
         if self.current_path == path:
             self.current_path = None
-            self.path_var.set(self._text("no_file"))
+            self._update_path_display()
         self.saved_macro_var.set("")
         self._refresh_saved_macros()
         self._update_controls()
+
+    def _save_shortcut(self, _event: tk.Event) -> str | None:
+        if self.state in {"Idle", "Stopped"}:
+            self.save()
+            return "break"
+        return None
+
+    def _delete_shortcut(self, event: tk.Event) -> str | None:
+        if event.widget is self.event_tree and self.state in {"Idle", "Stopped"}:
+            self.delete_selected_event()
+            return "break"
+        return None
 
     def _refresh_saved_macros(self, selected: str | None = None) -> None:
         filenames = sorted((path.name for path in self.script_directory.glob("*.json")), key=str.casefold)
@@ -352,7 +533,13 @@ class MacroRecorderApp:
 
     def _close(self) -> None:
         if self.state == "Recording":
-            self.recorder.stop()
+            self.macro.events = self.recorder.stop()
+            self.editor.load(self.macro.events, dirty=True)
+            self._refresh_event_table()
+            self._set_state("Stopped")
+            self._restore_window()
+        if not self._confirm_discard_changes():
+            return
         self.player.stop()
         self.hotkeys.stop()
         self.root.destroy()

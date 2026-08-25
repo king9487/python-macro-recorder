@@ -2,6 +2,7 @@ import threading
 import time
 import unittest
 
+from macro_recorder.event_editor import EventEditorModel
 from macro_recorder.models import MacroEvent
 from macro_recorder.player import MacroPlayer
 
@@ -24,6 +25,18 @@ class FakeMouse:
 
 
 class PlayerTests(unittest.TestCase):
+    def test_playback_uses_edited_event_list(self):
+        events = [MacroEvent(type="keyboard", action="down", key="a")]
+        editor = EventEditorModel(events)
+        editor.edit(0, {"action": "down", "key": "b", "delay": "0"})
+        keyboard = FakeKeyboard()
+        player = MacroPlayer(keyboard, FakeMouse())
+        done = threading.Event()
+        player.start(events, 1, 1.0, lambda _cancelled, _error: done.set())
+        self.assertTrue(done.wait(1))
+        pressed_key = next(call[1] for call in keyboard.calls if call[0] == "press")
+        self.assertEqual(getattr(pressed_key, "char", None), "b")
+
     def test_repeat_and_dispatch(self):
         keyboard = FakeKeyboard()
         mouse = FakeMouse()

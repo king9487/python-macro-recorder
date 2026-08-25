@@ -35,6 +35,12 @@ When recording or playback starts, the application minimizes automatically. Pres
 
 During playback, the player tracks keyboard keys and mouse buttons that it successfully presses. Normal completion, cancellation, and error exits all release only those still-tracked inputs before playback reports that it has finished.
 
+## Event Editor
+
+The main window includes a scrollable Event Editor showing each event's type, action, value, and delay. Select one event to edit or delete it, or move it one position up or down. Double-clicking an event opens the same editor as the Edit button. Delay values are editable decimal seconds; keyboard, coordinates, buttons, scroll values, and actions are validated before the in-memory event is replaced.
+
+Editor changes are used immediately by Play and do not require an automatic save. An asterisk beside Current file indicates unsaved edits. Successful Save or Load clears the marker; loading another macro or closing with unsaved edits asks for confirmation. `Ctrl+S` saves, and `Delete` removes the selected event after confirmation when the event table has focus.
+
 ## JSON format
 
 Files contain a version, display name, saved repeat count, and an ordered event list. Every event has a delay in seconds since the preceding recorded event. Missing `version`, `name`, `repeat`, `delay`, and scroll axes receive safe defaults.
