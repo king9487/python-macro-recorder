@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 import queue
 import sys
 import tkinter as tk
@@ -42,10 +43,12 @@ class MacroRecorderApp:
         self.repeat_var = tk.StringVar(value="1")
         self.speed_var = tk.StringVar(value="1.0")
         self.interval_var = tk.StringVar(value="0.0")
+        self.start_delay_var = tk.StringVar(value="3.0")
         self.count_var = tk.StringVar(value="0")
         self.status_var = tk.StringVar(value=self.state)
         self.saved_macro_var = tk.StringVar()
         self.language_var = tk.StringVar(value="繁體中文")
+        self.countdown_remaining: int | None = None
         self._build()
         self._apply_language()
         self._refresh_saved_macros()
@@ -100,19 +103,24 @@ class MacroRecorderApp:
         self.interval_entry = ttk.Entry(frame, textvariable=self.interval_var, width=10)
         self.interval_entry.grid(row=6, column=1, sticky="w", pady=4)
 
-        ttk.Separator(frame).grid(row=7, column=0, columnspan=4, sticky="ew", pady=10)
+        self.start_delay_label = ttk.Label(frame)
+        self.start_delay_label.grid(row=7, column=0, sticky="w", pady=4)
+        self.start_delay_entry = ttk.Entry(frame, textvariable=self.start_delay_var, width=10)
+        self.start_delay_entry.grid(row=7, column=1, sticky="w", pady=4)
+
+        ttk.Separator(frame).grid(row=8, column=0, columnspan=4, sticky="ew", pady=10)
         self.events_label = ttk.Label(frame)
-        self.events_label.grid(row=8, column=0, sticky="e")
-        ttk.Label(frame, textvariable=self.count_var).grid(row=8, column=1, sticky="w")
+        self.events_label.grid(row=9, column=0, sticky="e")
+        ttk.Label(frame, textvariable=self.count_var).grid(row=9, column=1, sticky="w")
         self.status_label = ttk.Label(frame)
-        self.status_label.grid(row=8, column=2, sticky="e")
-        ttk.Label(frame, textvariable=self.status_var).grid(row=8, column=3, sticky="w")
+        self.status_label.grid(row=9, column=2, sticky="e")
+        ttk.Label(frame, textvariable=self.status_var).grid(row=9, column=3, sticky="w")
 
         self.language_label = ttk.Label(frame)
-        self.language_label.grid(row=9, column=2, sticky="e", pady=(12, 0))
+        self.language_label.grid(row=10, column=2, sticky="e", pady=(12, 0))
         self.language_combo = ttk.Combobox(frame, textvariable=self.language_var, values=list(LANGUAGES),
                                            state="readonly", width=12)
-        self.language_combo.grid(row=9, column=3, sticky="w", pady=(12, 0))
+        self.language_combo.grid(row=10, column=3, sticky="w", pady=(12, 0))
         self.language_combo.bind("<<ComboboxSelected>>", lambda _event: self._apply_language())
 
     def _text(self, key: str) -> str:
@@ -125,6 +133,7 @@ class MacroRecorderApp:
             self.name_label: "macro_name", self.path_label: "current_file",
             self.saved_label: "saved_macros", self.repeat_label: "repeat_count",
             self.speed_label: "playback_speed", self.interval_label: "repeat_interval",
+            self.start_delay_label: "start_delay",
             self.events_label: "events", self.status_label: "status", self.language_label: "language",
             self.record_button: "record", self.stop_record_button: "stop_recording",
             self.play_button: "play", self.stop_play_button: "stop_playback",
@@ -134,11 +143,21 @@ class MacroRecorderApp:
             widget.configure(text=self._text(key))
         if self.current_path is None:
             self.path_var.set(self._text("no_file"))
-        self.status_var.set(self._text(self.state))
+        self._update_status()
+
+    def _update_status(self) -> None:
+        if self.state == "Playing" and self.countdown_remaining is not None:
+            self.status_var.set(self._text("starting_in").format(seconds=self.countdown_remaining))
+        elif self.state == "Playing":
+            self.status_var.set(self._text("playing_now"))
+        else:
+            self.status_var.set(self._text(self.state))
 
     def _set_state(self, state: str) -> None:
         self.state = state
-        self.status_var.set(self._text(state))
+        if state != "Playing":
+            self.countdown_remaining = None
+        self._update_status()
         self._update_controls()
 
     def _update_controls(self) -> None:
@@ -151,7 +170,7 @@ class MacroRecorderApp:
         self.stop_play_button.configure(state="normal" if playing else "disabled")
         for widget in (self.save_button, self.load_button, self.delete_button,
                        self.repeat_entry, self.speed_entry,
-                       self.interval_entry):
+                       self.interval_entry, self.start_delay_entry):
             widget.configure(state="normal" if idle else "disabled")
         if idle and not self.saved_macro_var.get():
             self.load_button.configure(state="disabled")
@@ -186,11 +205,12 @@ class MacroRecorderApp:
         self.root.after(150, lambda: self.root.attributes("-topmost", False))
         self.root.after_idle(self.root.focus_force)
 
-    def _playback_settings(self) -> tuple[int, float, float]:
+    def _playback_settings(self) -> tuple[int, float, float, float]:
         try:
             repeat = int(self.repeat_var.get())
             speed = float(self.speed_var.get().lower().rstrip("x"))
             interval = float(self.interval_var.get())
+            start_delay = float(self.start_delay_var.get())
         except ValueError as exc:
             raise ValueError(self._text("settings_numbers")) from exc
         if not 1 <= repeat <= 9999:
@@ -199,19 +219,23 @@ class MacroRecorderApp:
             raise ValueError(self._text("speed_range"))
         if not 0 <= interval <= 86400:
             raise ValueError(self._text("interval_range"))
-        return repeat, speed, interval
+        if not 0 <= start_delay <= 30:
+            raise ValueError(self._text("start_delay_range"))
+        return repeat, speed, interval, start_delay
 
     def start_playback(self) -> None:
         if self.state not in {"Idle", "Stopped"}:
             return
         try:
-            repeat, speed, interval = self._playback_settings()
+            repeat, speed, interval, start_delay = self._playback_settings()
             self.player.start(self.macro.events, repeat, speed,
                               lambda cancelled, error: self.messages.put(("playback_finished", (cancelled, error))),
-                              repeat_interval=interval)
+                              repeat_interval=interval, start_delay=start_delay,
+                              on_countdown=lambda value: self.messages.put(("countdown", value)))
         except Exception as exc:
             messagebox.showerror(self._text("playback_error"), str(exc), parent=self.root)
             return
+        self.countdown_remaining = max(1, math.ceil(start_delay)) if start_delay > 0 else None
         self._set_state("Playing")
         self.root.after_idle(self.root.iconify)
 
@@ -221,7 +245,7 @@ class MacroRecorderApp:
 
     def save(self) -> None:
         try:
-            repeat, _, interval = self._playback_settings()
+            repeat, _, interval, _ = self._playback_settings()
         except ValueError as exc:
             messagebox.showerror(self._text("invalid_settings"), str(exc), parent=self.root)
             return
@@ -313,6 +337,9 @@ class MacroRecorderApp:
                     self.stop_recording()
                 elif kind == "stop_playback":
                     self.stop_playback()
+                elif kind == "countdown" and self.state == "Playing":
+                    self.countdown_remaining = payload
+                    self._update_status()
                 elif kind == "playback_finished":
                     cancelled, error = payload
                     self._set_state("Stopped" if cancelled else "Idle")

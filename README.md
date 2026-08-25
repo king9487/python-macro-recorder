@@ -29,9 +29,11 @@ Use the buttons or global hotkeys:
 - **F9** stops recording.
 - **F10** immediately requests playback cancellation.
 
-F8, F9, and F10 are never included in recordings. Save uses the Macro name and writes the current macro to `script/<name>.json`. The Saved macros dropdown lists these files; selecting one loads and validates it. Delete Selected removes the chosen file after confirmation. Repeat count accepts 1–9999. Repeat interval controls the wait in seconds between complete repetitions. Playback speed accepts 0.1–10.0, with `2.0` twice as fast and `0.5` half speed.
+F8, F9, and F10 are never included in recordings. Save uses the Macro name and writes the current macro to `script/<name>.json`. The Saved macros dropdown lists these files; selecting one loads and validates it. Delete Selected removes the chosen file after confirmation. Repeat count accepts 1–9999. Repeat interval controls the wait in seconds between complete repetitions. Playback speed accepts 0.1–10.0, with `2.0` twice as fast and `0.5` half speed. Start Delay accepts 0–30 seconds and runs once before the first repetition; it is a playback setting and is not stored in macro JSON.
 
 When recording or playback starts, the application minimizes automatically. Pressing F9 stops recording and restores the application to the foreground. Playback completion, playback errors, and F10 cancellation also restore it to the foreground.
+
+During playback, the player tracks keyboard keys and mouse buttons that it successfully presses. Normal completion, cancellation, and error exits all release only those still-tracked inputs before playback reports that it has finished.
 
 ## JSON format
 
@@ -85,4 +87,4 @@ The script installs the build requirements and creates `dist\MacroRecorder.exe`.
 - Some elevated applications, secure desktops, antivirus tools, games, and remote-desktop environments may reject synthetic input or global hooks. Running with matching privileges may be required.
 - Keyboard layout differences can affect character replay. Password fields and other sensitive input are recorded as plain JSON key events; protect saved files accordingly.
 - Mouse movement is intentionally throttled (20 ms or 5 pixels) to keep files manageable, so freehand motion is approximate.
-- Playback does not restore keys or mouse buttons if cancellation happens between a down and up event. Release any stuck modifier manually.
+- If Windows or an input driver rejects a synthetic release event, the application reports the cleanup error, but the affected input may still need to be released manually.
